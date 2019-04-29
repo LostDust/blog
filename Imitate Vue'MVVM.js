@@ -7,6 +7,8 @@ function $(select) {
 // 订阅者对象
 let Reader = {
   init(node, callback) {
+    this.node = node;
+    this.callback = callback;
     return this;
   }
 };
@@ -15,10 +17,14 @@ let Reader = {
 let Observer = {
   init() {
     this.subs = [];
+    return this;
+  },
+  addSub(sub) {
+    this.subs.push(sub);
   },
   update(data) {
     this.subs.forEach(sub => {
-      // TODO updataView
+      sub.callback(sub.node);
     });
   }
 };
@@ -27,14 +33,15 @@ let Observer = {
 let Vue = {
   init(json) {
     this.$el = $(json.el);
+    this.$data = json.data;
     // 为实例属性绑定数据监听器
     this.watchData(json.data);
     // 将挂载点转变成文档片段
-    this.fragment = this.toFragment(this.$el);
-    // 查询文档片段中的模板语句，并记录订阅者
+    let fragment = this.toFragment(this.$el);
+    // 查询文档片段中的模板语句，转译并记录订阅者
     this.findSubs(fragment);
-    // 转译文档模板
-    translate();
+    // 将文档片段置回挂载点
+    this.$el.appendChild(fragment);
     return this;
   },
   watchData(dataObj) {
@@ -65,14 +72,14 @@ let Vue = {
           observer.update(newVal);
         }
       });
-      // 绑定监听器后触发一次监听器
-      observer.update(val);
+      // 绑定监听器后触发一次监听器（要在添加完订阅者之后）
+      // observer.update(val);
       // 观察者对象标识当前观察者实例
-      Observer.target = observer;
+      // Observer.target = observer;
       // 强行执行 getter，往订阅者列表中添加当前观察者实例
-      var v = dataObj[key];
+      // var v = dataObj[key];
       // 释放观察者对象标识
-      Observer.target = null;
+      // Observer.target = null;
       // 为什么要将观察者实例加入订阅者列表？
     }
   },
@@ -92,61 +99,113 @@ let Vue = {
     // 获取文档片段的子节点集合（NodeList 对象）
     let nodeList = [...fragment.childNodes];
     let self = this; // 标记 Vue 对象指针
+    function setReader(node, callback) {
+      // 实例化一个订阅者
+      let reader = Object.create(Reader);
+      reader.init(node, callback.bind(self));
+      // 标记订阅者
+      Observer.target = reader;
+      // 转译指令模板语句
+      callback.call(self, node);
+      // 释放订阅者
+      Observer.target = null;
+    }
     // 遍历子节点集合
     nodeList.forEach(node => {
-      switch (node.nodeType) {
-        // 若节点为元素节点
-        case 1:
-          // 查询指令模板语句
-          let result = [...node.attributes].find(attr => {
-            return self.reg.isDirective.test(attr.name);
-          });
-          // 转译指令模板语句
-          if (result) self.translateAttr(node);
-          // 若元素节点下还有子节点，继续递归
-          if (node.childNodes.length) self.findSubs(node);
-          break;
-        // 若节点为文本节点
-        case 3:
-          // 查询文本模板语句
-          if (self.reg.isTemplate.test(node.textContent)) {
-            // 实例化一个订阅者
-            let reader = Object.create(Reader).init(node, self.translateText);
-            // 转译文本模板语句
-            self.translateText(node);
-          }
+      // 若节点为元素节点
+      if (node.nodeType == 1) {
+        // 查询指令模板语句
+        let result = [...node.attributes].find(attr => {
+          return self.reg.isDirective.test(attr.name);
+        });
+        if (!result) return;
+        // 配置订阅者并转译节点
+        setReader(node, self.translateAttr);
+        // 若元素节点下还有子节点，继续递归
+        if (node.childNodes.length) self.findSubs(node);
+      }
+      // 若节点为文本节点
+      else {
+        if (!self.reg.isTemplate.test(node.textContent)) return;
+        // 配置订阅者并转译节点
+        setReader(node, self.translateText);
       }
     });
   },
   // 转译指令模板语句
   translateAttr(node) {
     let self = this;
+    let directives = [];
+    [...node.attributes].forEach(attr => {
+      if (self.reg.isDirective.test(attr.name)) {
+        directives.push(attr);
+      }
+    });
+    directives.forEach(attr => {
+      // on 指令
+      if (self.reg.isOnDirective.test(attr.name)) {
+        self.translateOn(node, attr);
+      }
+      // bind 指令
+      if (self.reg.isBindDirective.test(attr.name)) {
+        self.translateBind(node, attr);
+      }
+      // model 指令
+      else if (self.reg.isModelDirective.test(attr.name)) {
+        self.translateModel(node, attr);
+      }
+      // 删除该指令
+      node.removeAttribute(attr.name);
+    });
+  },
+  // 转译 on 指令
+  translateOn(node, attr) {
+    let eventType = attr.Name.replace(this.reg.onBefore, "");
+    let callback = this.mathods[attr.value];
+    if (eventType && callback) {
+      node.addEventListener(eventType, callback, false);
+    }
+  },
+  // 转译 bind 指令
+  translateBind(node, attr) {
+    let attrName = attr.name.replace(this.reg.bindBefore, "");
+    // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
+    let value = this.$data[attr.value];
+    node.setAttribute(attrName, value);
+  },
+  // 转译 model 指令
+  translateModel(node, attr) {
+    // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
+    let val = this.$data[attr.value];
+    node.value = typeof val == "undefined" ? "" : val;
   },
   // 转译文本模板语句
   translateText(node) {
     let self = this;
     let text = node.textContent;
     let templates = text.match(this.reg.isTemplate);
+    // 遍历每个模板语句
     templates.forEach(template => {
       slice = template.slice(2, -2).match(/\S+/)[0];
-      // 此时会从实例的数据对象中取值，并添加订阅者！！！
+      // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
       text = text.replace(template, self.$data[slice]);
     });
     node.textContent = text;
   },
-  translate() {},
   // 正则库
   reg: {
     isTemplate: /\{\{\s*((?:.|\n)+?)\s*\}\}/g,
     isDirective: /^v-|^@|^:/,
     isOnDirective: /^v-on:|^@/,
+    onBefore: /^@|^v-on:/,
     isBindDirective: /^v-bind:|^:/,
+    bindBefore: /^:|^v-bind:/,
     isModelDirective: /^v-model/
   }
 };
 
 // Vue 实例
-let app = Object.create(Vue).init({
-  el: "#app",
-  data: {}
-});
+// let app = Object.create(Vue).init({
+//   el: "#app",
+//   data: {}
+// });
