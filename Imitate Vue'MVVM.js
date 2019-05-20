@@ -26,18 +26,18 @@ let Observer = {
     this.subs.push(sub);
   },
   update() {
-    // 1. 将挂载点转换为文档片段
-    // 2. 从 Vue 实例中获取数据
-    // 3. 重新转译原节点
-    // 4. 将转译后的节点引用保存在订阅者中
-    // 5. 将节点替换进文档片段中
-    // 6. 将文档片段置回挂载点
-
-    // 将挂载点转变成文档片段
-    // let fragment = this.instance.toFragment(this.instance.$el);
+    // 将挂载点移出文档流
+    this.instance.$el.style.display = "none";
     this.subs.forEach(sub => {
+      // 如果节点时 input，先比较一下 input.value
+      if (sub.input) {
+        let key = sub.origin.getAttribute("v-model");
+        if (sub.target.value == this.instance.$data[key]) return;
+      }
+      // 转译模板语句并记录转译后的节点
       sub.target = sub.callback(sub.origin, sub.target);
     });
+    this.instance.$el.style.display = "block";
   }
 };
 
@@ -46,6 +46,7 @@ let MyVue = {
   init(json) {
     this.$el = $(json.el);
     this.$data = json.data;
+    // Object.setPrototypeOf
     // 为实例属性绑定数据监听器
     this.observeData(json.data);
     // 将挂载点转变成文档片段
@@ -107,18 +108,14 @@ let MyVue = {
     function setReader(node, callback) {
       // 实例化一个订阅者
       let reader = Object.create(Reader);
-      // 需要传入：原节点、替换节点、绑定 Vue 实例引用的回调函数
-      // 1. 将挂载点转换为文档片段
-      // 2. 从 Vue 实例中获取数据
-      // 3. 重新转译原节点
-      // 4. 将转译后的节点引用保存在订阅者中
-      // 5. 将转译后的节点替换进文档片段中
-      // 6. 将文档片段置回挂载点
       reader.init(node, callback.bind(self));
       // 标记订阅者
       Observer.target = reader;
       // 转译模板语句并记录转译后的节点
       reader.target = callback.call(self, node);
+      // 标记 input 类型节点
+      if (node.tagName == "INPUT") reader.input = true;
+      console.log(node.tagName == "INPUT");
       // 释放订阅者标记
       Observer.target = null;
     }
@@ -146,53 +143,6 @@ let MyVue = {
     });
     return fragment;
   },
-  // 转译指令模板语句
-  translateAttr(node) {
-    let self = this;
-    let directives = [];
-    [...node.attributes].forEach(attr => {
-      if (self.reg.isDirective.test(attr.name)) {
-        directives.push(attr);
-      }
-    });
-    directives.forEach(attr => {
-      // on 指令
-      if (self.reg.isOnDirective.test(attr.name)) {
-        self.translateOn(node, attr);
-      }
-      // bind 指令
-      if (self.reg.isBindDirective.test(attr.name)) {
-        self.translateBind(node, attr);
-      }
-      // model 指令
-      else if (self.reg.isModelDirective.test(attr.name)) {
-        self.translateModel(node, attr);
-      }
-      // 删除该指令
-      node.removeAttribute(attr.name);
-    });
-  },
-  // 转译 on 指令
-  translateOn(node, attr) {
-    let eventType = attr.Name.replace(this.reg.onBefore, "");
-    let callback = this.mathods[attr.value];
-    if (eventType && callback) {
-      node.addEventListener(eventType, callback, false);
-    }
-  },
-  // 转译 bind 指令
-  translateBind(node, attr) {
-    let attrName = attr.name.replace(this.reg.bindBefore, "");
-    // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
-    let value = this.$data[attr.value];
-    node.setAttribute(attrName, value);
-  },
-  // 转译 model 指令
-  translateModel(node, attr) {
-    // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
-    let val = this.$data[attr.value];
-    node.value = typeof val == "undefined" ? "" : val;
-  },
   // 转译文本模板语句
   translateText(...argus) {
     let origin = argus[0];
@@ -212,6 +162,68 @@ let MyVue = {
     // 替换节点！！！！！！！！！！！！！！！
     target.parentNode.replaceChild(newNode, target);
     return newNode;
+  },
+  // 转译指令模板语句
+  translateAttr(...argus) {
+    let origin = argus[0];
+    let target = argus.length == 2 ? argus[1] : origin;
+    // 克隆新节点
+    let newNode = origin.cloneNode(true);
+    let directives = [];
+    [...newNode.attributes].forEach(attr => {
+      if (this.reg.isDirective.test(attr.name)) {
+        directives.push(attr);
+      }
+    });
+    directives.forEach(attr => {
+      // on 指令
+      if (this.reg.isOnDirective.test(attr.name)) {
+        this.translateOn(newNode, attr);
+      }
+      // bind 指令
+      else if (this.reg.isBindDirective.test(attr.name)) {
+        this.translateBind(newNode, attr);
+      }
+      // model 指令
+      else if (this.reg.isModelDirective.test(attr.name)) {
+        this.translateModel(newNode, attr);
+      }
+      // 删除该指令
+      newNode.removeAttribute(attr.name);
+    });
+    // 替换节点！！！！！！！！！！！！！！！
+    target.parentNode.replaceChild(newNode, target);
+    return newNode;
+  },
+  // 转译 on 指令
+  translateOn(node, attr) {
+    let eventType = attr.Name.replace(this.reg.onBefore, "");
+    let callback = this.mathods[attr.value];
+    if (eventType && callback) {
+      node.addEventListener(eventType, callback, false);
+    }
+  },
+  // 转译 bind 指令
+  translateBind(node, attr) {
+    let attrName = attr.name.replace(this.reg.bindBefore, "");
+    // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
+    let value = this.$data[attr.value];
+    node.setAttribute(attrName, value);
+  },
+  // 转译 model 指令
+  translateModel(node, attr) {
+    let self = this;
+    // 此时会从实例的数据对象中取值，若是第一次转译会记录订阅者！
+    let val = this.$data[attr.value];
+    // 监听 input 事件
+    node.addEventListener(
+      "input",
+      function() {
+        self.$data[attr.value] = this.value;
+      },
+      false
+    );
+    node.value = typeof val == "undefined" ? "" : val;
   },
   // 正则库
   reg: {
