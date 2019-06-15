@@ -1,4 +1,4 @@
-# JavaScript_子类实例调用父类的方法
+# JavaScript\_子类实例调用父类的方法实现多态
 
 ## 面向类（ES6）
 
@@ -44,9 +44,12 @@ obj2.todo();
 ```JavaScript
 // 声明父类
 let Parent = {
-  init(data, self = this) {
-    self.data = data;
+  init(data) {
+    this.data = data;
   },
+  // init(data, self = this) {
+  //   self.data = data;
+  // },
   todo(self = this) {
     console.log(self.data);
   }
@@ -64,7 +67,8 @@ Child.init = function(data, msg, self = this) {
 };
 Child.todo = function(self = this) {
   // 调用父类方法
-  Object.getPrototypeOf(Child).todo(self);
+  // Object.getPrototypeOf(Child).todo(self);
+  Parent.todo();
   // 子类的功能扩充
   console.log(self.msg);
 };
